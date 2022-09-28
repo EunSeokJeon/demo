@@ -15,7 +15,7 @@ pipeline {
         when { expression { return params.BUILD_DOCKER_IMAGE } }
         steps {
             dir("${env.WORKSPACE}") { // /var/lib/jenkins/workspace/demo
-                sh 'docker build -t test:1 .'
+                sh 'sudo docker build -t test:1 .'
             }
         }
         post {
