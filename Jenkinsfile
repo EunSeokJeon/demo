@@ -15,7 +15,7 @@ pipeline {
         when { expression { return params.BUILD_DOCKER_IMAGE } }
         steps {
             dir("${env.WORKSPACE}") { // /var/lib/jenkins/workspace/demo
-                sh 'sudo docker build -t test:1 .'
+                sh 'docker build -t test:1 .'
             }
         }
         post {
@@ -35,6 +35,7 @@ pipeline {
             '''
         }
     }
+    
     stage('Prompt for deploy') {
         when { expression { return params.PROMPT_FOR_DEPLOY } }
         agent { label 'deploy' }
