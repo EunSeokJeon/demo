@@ -12,11 +12,6 @@ pipeline {
   }
 
   stages {
-  	stage('============ Project Build ============') {
-  		steps {
-  		}
-  	}
-
     stage('============ Build Docker Image ============') {
         when { expression { return params.BUILD_DOCKER_IMAGE } }
         steps {
