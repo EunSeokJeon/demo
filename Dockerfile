@@ -1,16 +1,13 @@
-FROM openjdk:8-jdk-alpine as builder
-WORKDIR application
-ARG JAR_FILE=build/libs/*.jar
-COPY ${JAR_FILE} application.jar
-RUN java -Djarmode=layertools -jar application.jar extract
+FROM openjdk:18-jdk-alpine AS builder
+COPY gradlew .
+COPY gradle gradle
+COPY build.gradle .
+COPY settings.gradle .
+COPY src src
+RUN chmod +x ./gradlew
+RUN ./gradlew bootJAR
 
-FROM openjdk:8-jdk-alpine
-WORKDIR application
-ENV port 8080
-ENV spring.profiles.active local
-COPY --from=builder application/dependencies/ ./
-COPY --from=builder application/spring-boot-loader/ ./
-COPY --from=builder application/snapshot-dependencies/ ./
-COPY --from=builder application/application/ ./
-
-ENTRYPOINT ["java", "org.springframework.boot.loader.JarLauncher"]
+FROM openjdk:18-jdk-alpine
+COPY --from=builder build/libs/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app.jar"]
