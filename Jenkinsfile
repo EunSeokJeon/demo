@@ -15,7 +15,7 @@ pipeline {
     stage('============ Build Docker Image ============') {
         when { expression { return params.BUILD_DOCKER_IMAGE } }
         steps {
-            dir("${env.WORKSPACE}") { // /java_home/workspace/10/...
+            dir("${env.WORKSPACE}") { // /var/lib/jenkins/workspace/demo
                 sh 'docker build -t test:1 .'
             }
         }
@@ -23,16 +23,6 @@ pipeline {
             always {
                 echo "Docker build success!"
             }
-        }
-    }
-    stage('============ Run test code ============') {
-        when { expression { return params.RUN_TEST } }
-        agent { label 'build' }
-        steps {
-            sh'''
-                aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY}
-                docker run --rm ${ECR_DOCKER_IMAGE}:${ECR_DOCKER_TAG} /root/.local/bin/pytest -v
-            '''
         }
     }
     stage('============ Push Docker Image ============') {
