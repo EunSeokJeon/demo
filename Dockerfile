@@ -11,4 +11,4 @@ FROM adoptopenjdk:8-jdk-hotspot # 베이스 이미지
 COPY --from=builder build/libs/*.jar app.jar # builder 이미지에서 build/libs/*.jar 파일을 app.jar로 복사
 
 EXPOSE 8080 # 컨테이너 Port 노출
-ENTRYPOINT ["java","-jar","/app.jar"] # jar 파일 실행
+ENTRYPOINT ["java","-jar","/app.jar"] # jar 파일 실
