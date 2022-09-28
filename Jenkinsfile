@@ -10,7 +10,6 @@ pipeline {
   environment {
     REGION = "ap-northeast-2"
   }
-
   stages {
     stage('============ Build Docker Image ============') {
         when { expression { return params.BUILD_DOCKER_IMAGE } }
