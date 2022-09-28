@@ -46,7 +46,6 @@ pipeline {
                                                description: '',
                                                name: 'APPROVAL_NUM')]
             }
-
             echo "${env.APPROAL_NUM}"
         }
     }
