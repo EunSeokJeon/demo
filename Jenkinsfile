@@ -11,6 +11,15 @@ pipeline {
     REGION = "ap-northeast-2"
   }
   stages {
+  	stage('checkout') {
+steps {
+  git branch: 'main',
+	  credentialsId: 'github_access_token',
+	  url: 'https://github.com/EunSeokJeon/demo.git'
+  sh 'chmod 400 private-key.pem'
+}
+    }
+
     stage('============ Build Docker Image ============') {
         when { expression { return params.BUILD_DOCKER_IMAGE } }
         steps {

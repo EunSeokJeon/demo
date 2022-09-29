@@ -1,0 +1,47 @@
+pipeline {
+    agent any
+    environment {
+        AWS_PUBLIC_IP = '{ec2-instance-public-ip}'
+        SSH_CMD = 'ssh -i private-key.pem ec2-user@{ec2-instance-public-ip}'
+        DOCKER = 'sudo docker'
+    }
+    stages {
+        stage('checkout') {
+            steps {
+                git branch: 'main',
+                    credentialsId: 'github_access_token',
+                    url: 'https://github.com/Junhyunny/jenkins-github-webhook.git'
+                sh 'chmod 400 private-key.pem'
+            }
+        }
+        stage('build') {
+            steps {
+                dir ('front-end') {
+                    sh 'rm -rf build'
+                    sh 'npm install'
+                    sh 'npm run build'
+                    sh 'docker build -t $AWS_PUBLIC_IP:5000/front-end:latest .'
+                }
+            }
+        }
+        stage('deploy') {
+            steps {
+                script {
+                    try {
+                        sh '$SSH_CMD $DOCKER stop front-end'
+                        sh '$SSH_CMD $DOCKER rm front-end'
+                    } catch (e) {
+                        sh 'echo "fail to stop and remove container"'
+                    }
+                    withCredentials([usernamePassword(credentialsId: 'private_registry_credential', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                        sh 'docker login $AWS_PUBLIC_IP:5000 -u $USERNAME -p $PASSWORD'
+                        sh '$SSH_CMD $DOCKER login localhost:5000 -u $USERNAME -p $PASSWORD'
+                }
+                sh 'docker push $AWS_PUBLIC_IP:5000/front-end:latest'
+                sh '$SSH_CMD $DOCKER pull localhost:5000/front-end:latest'
+                sh '$SSH_CMD $DOCKER run -d --name front-end -p 3000:80 localhost:5000/front-end:latest'
+                }
+            }
+        }
+    }
+}

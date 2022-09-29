@@ -1,0 +1,194 @@
+pipeline {
+    agent any
+    stages {
+        stage('Git Clone') {
+            steps {
+                script {
+                    try {
+                        git url: "https://git-codecommit.ap-northeast-2.amazonaws.com/v1/repos/cb-test-api", branch: "master", credentialsId: "$GIT_CREDENTIALS_ID"
+                        sh "sudo rm -rf ./.git"
+                        env.cloneResult=true
+                    } catch (error) {
+                        print(error)
+                        env.cloneResult=false
+                        currentBuild.result = 'FAILURE'
+                    }
+                }
+            }
+        }
+        stage('Build JAR') {
+            when {
+                expression {
+                    return env.cloneResult ==~ /(?i)(Y|YES|T|TRUE|ON|RUN)/
+                }
+            }
+            steps {
+                script{
+                    try {
+                        sh """
+                        rm -rf deploy
+                        mkdir deploy
+                        """
+                        sh "sudo sed -i \"s/module_name=.*/module_name=${env.JOB_NAME}\\:${env.BUILD_NUMBER}/g\" /var/lib/jenkins/workspace/${env.JOB_NAME}/src/main/resources/application.properties"
+                        sh "cat /var/lib/jenkins/workspace/${env.JOB_NAME}/src/main/resources/application.properties"
+                        sh 'mvn -Dmaven.test.failure.ignore=true clean install'
+                        sh """
+                        cd deploy
+                        cp /var/lib/jenkins/workspace/${env.JOB_NAME}/target/*.jar ./${env.JOB_NAME}.jar
+                        """
+                        env.mavenBuildResult=true
+                    } catch (error) {
+                        print(error)
+                        echo 'Remove Deploy Files'
+                        sh "sudo rm -rf /var/lib/jenkins/workspace/${env.JOB_NAME}/*"
+                        env.mavenBuildResult=false
+                        currentBuild.result = 'FAILURE'
+                    }
+                }
+            }
+            post {
+                success {
+                    slackSend channel: '#pipeline-deploy', color: 'good', message: "The pipeline ${currentBuild.fullDisplayName} stage Build JAR successfully."
+                }
+                failure {
+                    slackSend channel: '#pipeline-deploy', color: 'danger', message: "The pipeline ${currentBuild.fullDisplayName} stage Build JAR failed."
+                }
+            }
+        }
+        stage('S3 Copy & Upload') {
+            when {
+                expression {
+                    return env.mavenBuildResult ==~ /(?i)(Y|YES|T|TRUE|ON|RUN)/
+                }
+            }
+            steps{
+                script{
+                    try {
+                        sh """
+                        cd deploy
+                        cat > deploy.sh <<-EOF
+#!/bin/bash
+kill -9 dollar(ps -ef | grep ${env.JOB_NAME}.jar | grep -v grep | awk '{print dollar2}')
+nohup java -jar /home/jenkins/deploy/${env.JOB_NAME}.jar 1> /dev/null 2>&1 &
+EOF"""
+
+                        sh"""
+                        cd deploy
+                        sed -i "s/dollar/\$/g" ./deploy.sh
+                        """
+
+                        sh """
+                        cd deploy
+                        cat>appspec.yml<<-EOF
+version: 0.0
+os: linux
+files:
+  - source:  /
+    destination: /home/jenkins/deploy
+
+permissions:
+  - object: /
+    pattern: "**"
+    owner: jenkins
+    group: jenkins
+
+hooks:
+  ApplicationStart:
+    - location: deploy.sh
+      timeout: 60
+      runas: root
+EOF"""
+
+                        sh """
+                        cd deploy
+                        chown jenkins:jenkins appspec.yml
+                        chown jenkins:jenkins deploy.sh
+                        chmod 700 appspec.yml
+                        zip -r deploy *
+                        """
+                        withAWS(credentials:"$AWS_CREDENTIALS") {
+                            s3Upload(path:"${env.JOB_NAME}/${env.BUILD_NUMBER}/${env.JOB_NAME}.zip", file:"/var/lib/jenkins/workspace/${env.JOB_NAME}/deploy/deploy.zip",bucket:'cb-test-deploy')
+                            env.copyResult=true
+                        }
+                        echo 'Remove Deploy Files'
+                        sh "sudo rm -rf /var/lib/jenkins/workspace/${env.JOB_NAME}/*"
+                    } catch (error) {
+                        print(error)
+                        echo 'Remove Deploy Files'
+                        sh "sudo rm -rf /var/lib/jenkins/workspace/${env.JOB_NAME}/*"
+                        env.copyResult = false
+                        currentBuild.result = 'FAILURE'
+                    }
+                }
+            }
+            post {
+                success {
+                    slackSend channel: '#pipeline-deploy', color: 'good', message: "The pipeline ${currentBuild.fullDisplayName} stage S3 CP & Upload successfully."
+                }
+                failure {
+                    slackSend channel: '#pipeline-deploy', color: 'danger', message: "The pipeline ${currentBuild.fullDisplayName} stage S3 CP & Upload failed."
+                }
+            }
+        }
+        stage('Deploy'){
+            when {
+                expression {
+                    return env.copyResult ==~ /(?i)(Y|YES|T|TRUE|ON|RUN)/
+                }
+            }
+            steps {
+                script{
+                    try {
+                        withAWS(credentials:"$AWS_CREDENTIALS") {
+                            sh"""
+                                aws deploy create-deployment \
+                                --application-name CB-TEST-API \
+                                --deployment-group-name TEST-BlueGreen \
+                                --region ap-northeast-2 \
+                                --s3-location bucket=cb-test-deploy,bundleType=zip,key=${env.JOB_NAME}/${env.BUILD_NUMBER}/${env.JOB_NAME}.zip \
+                                --file-exists-behavior OVERWRITE \
+                                --output json > DEPLOYMENT_ID.json
+                                cat DEPLOYMENT_ID.json
+                            """
+                        }
+                        def DEPLOYMENT_ID = readJSON file: './DEPLOYMENT_ID.json'
+                        echo "${DEPLOYMENT_ID.deploymentId}"
+                        sh "rm -rf ./DEPLOYMENT_ID.json"
+                        def DEPLOYMENT_RESULT = ""
+                        while("$DEPLOYMENT_RESULT" != "\"Succeeded\"") {
+                            DEPLOYMENT_RESULT = withAWS(credentials:"$AWS_CREDENTIALS") {
+                                sh(
+                                    script:"aws deploy get-deployment \
+                                    --query \"deploymentInfo.status\" \
+                                    --region ap-northeast-2 \
+                                    --deployment-id ${DEPLOYMENT_ID.deploymentId}",
+                                    returnStdout: true
+                                ).trim()
+                            }
+                            echo "$DEPLOYMENT_RESULT"
+                            if ("$DEPLOYMENT_RESULT" == "\"Failed\"") {
+                                throw new Exception("CodeDeploy Failed")
+                                break
+                            }
+                            sleep(30)
+                        }
+                        currentBuild.result = 'SUCCESS'
+                    } catch (error) {
+                        print(error)
+                        echo 'Remove Deploy Files'
+                        sh "sudo rm -rf /var/lib/jenkins/workspace/${env.JOB_NAME}/*"
+                        currentBuild.result = 'FAILURE'
+                    }
+                }
+            }
+            post {
+                success {
+                    slackSend channel: '#pipeline-deploy', color: 'good', message: "The pipeline ${currentBuild.fullDisplayName} stage Deploy successfully."
+                }
+                failure {
+                    slackSend channel: '#pipeline-deploy', color: 'danger', message: "The pipeline ${currentBuild.fullDisplayName} stage Deploy failed."
+                }
+            }
+        }
+    }
+}
